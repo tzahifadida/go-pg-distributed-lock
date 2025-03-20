@@ -24,53 +24,53 @@ go get github.com/yourusername/go-pg-distributed-lock
 package main
 
 import (
-    "context"
-    "database/sql"
-    "log"
-    "time"
-    
-    "github.com/jackc/pgx/v5/stdlib"
-    pgdlock "github.com/yourusername/go-pg-distributed-lock"
+	"context"
+	"database/sql"
+	"log"
+	"time"
+
+	"github.com/jackc/pgx/v5/stdlib"
+	pgdlock "github.com/yourusername/go-pg-distributed-lock"
 )
 
 func main() {
-    // Connect to PostgreSQL
-    db, err := sql.Open("pgx", "postgres://username:password@localhost:5432/dbname")
-    if err != nil {
-        log.Fatalf("Failed to connect to database: %v", err)
-    }
-    defer db.Close()
-    
-    // Create context
-    ctx := context.Background()
-    
-    // Create lock manager with default config
-    lockManager, err := pgdlock.NewLockManager(ctx, db, nil)
-    if err != nil {
-        log.Fatalf("Failed to create lock manager: %v", err)
-    }
-    
-    // Create a lock for a specific resource
-    lock := lockManager.NewDistributedLock("my-resource")
-    
-    // Try to acquire the lock
-    if err := lock.Lock(ctx); err != nil {
-        log.Printf("Could not acquire lock: %v", err)
-        return
-    }
-    
-    log.Println("Lock acquired, performing work...")
-    
-    // Simulate work
-    time.Sleep(5 * time.Second)
-    
-    // Release the lock
-    if err := lock.Unlock(ctx); err != nil {
-        log.Printf("Error releasing lock: %v", err)
-        return
-    }
-    
-    log.Println("Lock released")
+	// Connect to PostgreSQL
+	db, err := sql.Open("pgx", "postgres://username:password@localhost:5432/dbname")
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Create context
+	ctx := context.Background()
+
+	// Create lock manager with default config
+	lockManager, err := pgdlock.NewLockManager(ctx, db, nil)
+	if err != nil {
+		log.Fatalf("Failed to create lock manager: %v", err)
+	}
+
+	// Create a lock for a specific resource
+	lock := lockManager.NewDistributedLock("my-resource")
+
+	// Try to acquire the lock
+	if err := lock.Lock(ctx); err != nil {
+		log.Printf("Could not acquire lock: %v", err)
+		return
+	}
+
+	log.Println("Lock acquired, performing work...")
+
+	// Simulate work
+	time.Sleep(5 * time.Second)
+
+	// Release the lock
+	if err := lock.Unlock(ctx); err != nil {
+		log.Printf("Error releasing lock: %v", err)
+		return
+	}
+
+	log.Println("Lock released")
 }
 ```
 
@@ -80,12 +80,12 @@ You can customize the lock behavior with the `Config` struct:
 
 ```go
 config := pgdlock.Config{
-    MaxRetries:        3,                  // Maximum attempts to acquire a lock
-    RetryDelay:        100 * time.Millisecond, // Delay between retry attempts
-    HeartbeatInterval: 5 * time.Second,    // How often to send heartbeats
-    LeaseTime:         30 * time.Second,   // How long a lock is valid
-    SchemaName:        "public",           // Database schema
-    TablePrefix:       "myapp_",           // Prefix for the locks table (results in "myapp_distributed_locks")
+MaxRetries:        3,                  // Maximum attempts to acquire a lock
+RetryDelay:        100 * time.Millisecond, // Delay between retry attempts
+HeartbeatInterval: 5 * time.Second,    // How often to send heartbeats
+LeaseTime:         30 * time.Second,   // How long a lock is valid
+SchemaName:        "public",           // Database schema
+TablePrefix:       "myapp_",           // Prefix for the locks table (results in "myapp_distributed_locks")
 }
 
 lockManager, err := pgdlock.NewLockManager(ctx, db, &config)
@@ -100,14 +100,14 @@ For example, you might use different prefixes for different services:
 ```go
 // For the auth service
 authConfig := pgdlock.Config{
-    TablePrefix: "auth_",  // Table will be "auth_distributed_locks"
-    // ... other config options
+TablePrefix: "auth_",  // Table will be "auth_distributed_locks"
+// ... other config options
 }
 
 // For the payment service
 paymentConfig := pgdlock.Config{
-    TablePrefix: "payment_",  // Table will be "payment_distributed_locks"
-    // ... other config options
+TablePrefix: "payment_",  // Table will be "payment_distributed_locks"
+// ... other config options
 }
 ```
 
@@ -125,13 +125,13 @@ The library provides specific error types to handle common locking scenarios:
 
 ```go
 if err := lock.Lock(ctx); err != nil {
-    if errors.Is(err, pgdlock.ErrLockAlreadyHeld) {
-        // Resource is already locked by another process
-    } else if errors.Is(err, pgdlock.ErrLockExpired) {
-        // Lock has expired
-    } else {
-        // Other errors
-    }
+if errors.Is(err, pgdlock.ErrLockAlreadyHeld) {
+// Resource is already locked by another process
+} else if errors.Is(err, pgdlock.ErrLockExpired) {
+// Lock has expired
+} else {
+// Other errors
+}
 }
 ```
 
@@ -142,7 +142,7 @@ if err := lock.Lock(ctx); err != nil {
 ```go
 // Extend the current lock by an additional 30 seconds
 if err := lock.ExtendLease(ctx, 30 * time.Second); err != nil {
-    log.Printf("Failed to extend lease: %v", err)
+log.Printf("Failed to extend lease: %v", err)
 }
 ```
 
@@ -151,11 +151,29 @@ if err := lock.ExtendLease(ctx, 30 * time.Second); err != nil {
 ```go
 isLocked, err := lock.IsLocked(ctx)
 if err != nil {
-    log.Printf("Error checking lock status: %v", err)
+log.Printf("Error checking lock status: %v", err)
 } else if isLocked {
-    log.Println("Lock is currently held by this node")
+log.Println("Lock is currently held by this node")
 } else {
-    log.Println("Lock is not currently held")
+log.Println("Lock is not currently held")
+}
+```
+
+### Customizing Lock Retry Behavior
+
+You can customize the retry behavior for individual locks:
+
+```go
+// Create a lock with custom retry options
+lock := lockManager.NewDistributedLock(
+    "my-critical-resource",
+    WithMaxRetries(10),           // Try more times than the default
+    WithRetryDelay(50 * time.Millisecond), // Use a shorter retry delay
+)
+
+// Acquire the lock with the custom retry behavior
+if err := lock.Lock(ctx); err != nil {
+    log.Printf("Failed to acquire lock despite 10 attempts: %v", err)
 }
 ```
 

@@ -20,20 +20,53 @@ type DistributedLock struct {
 	expirationTimer  *time.Timer
 	leaseExpiration  time.Time
 	heartbeatStopped bool
+	maxRetries       int           // Maximum number of retries when acquiring the lock
+	retryDelay       time.Duration // Delay between retry attempts
 }
 
 // NewDistributedLock creates a new DistributedLock instance.
 //
 // Parameters:
 //   - resource: The name of the resource being locked.
+//   - options: Optional parameters for customizing the lock behavior.
 //
 // Returns:
 //   - A pointer to the newly created DistributedLock.
-func (lm *LockManager) NewDistributedLock(resource string) *DistributedLock {
-	return &DistributedLock{
+func (lm *LockManager) NewDistributedLock(resource string, options ...LockOption) *DistributedLock {
+	lock := &DistributedLock{
 		lm:               lm,
 		resource:         resource,
 		heartbeatStopped: true,
+		maxRetries:       lm.Config.MaxRetries,
+		retryDelay:       lm.Config.RetryDelay,
+	}
+
+	// Apply any provided options
+	for _, option := range options {
+		option(lock)
+	}
+
+	return lock
+}
+
+// LockOption defines a function type for customizing a DistributedLock
+type LockOption func(*DistributedLock)
+
+// WithMaxRetries sets a custom maximum number of retry attempts for lock acquisition
+func WithMaxRetries(maxRetries int) LockOption {
+	return func(lock *DistributedLock) {
+		if maxRetries > 0 {
+			lock.maxRetries = maxRetries
+		}
+	}
+}
+
+// WithRetryDelay sets a custom delay between retry attempts for lock acquisition
+func WithRetryDelay(retryDelay time.Duration) LockOption {
+	return func(lock *DistributedLock) {
+		if retryDelay > 0 {
+			lock.retryDelay = retryDelay
+		}
 	}
 }
 
@@ -48,7 +81,7 @@ func (dl *DistributedLock) Lock(ctx context.Context) error {
 	dl.mutex.Lock()
 	defer dl.mutex.Unlock()
 
-	for attempt := 0; attempt < dl.lm.Config.MaxRetries; attempt++ {
+	for attempt := 0; attempt < dl.maxRetries; attempt++ {
 		err := dl.attemptLock(ctx)
 		if err == nil {
 			dl.leaseExpiration = dl.lm.clock.Now().Add(dl.lm.Config.LeaseTime)
@@ -58,17 +91,17 @@ func (dl *DistributedLock) Lock(ctx context.Context) error {
 		if errors.Is(err, ErrLockAlreadyHeld) {
 			return err
 		}
-		if attempt < dl.lm.Config.MaxRetries-1 {
+		if attempt < dl.maxRetries-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(dl.lm.Config.RetryDelay):
+			case <-time.After(dl.retryDelay):
 				// Continue to next iteration
 			}
 		}
 	}
 
-	return fmt.Errorf("failed to acquire lock after %d attempts", dl.lm.Config.MaxRetries)
+	return fmt.Errorf("failed to acquire lock after %d attempts", dl.maxRetries)
 }
 
 func (dl *DistributedLock) attemptLock(ctx context.Context) error {
@@ -113,7 +146,7 @@ func (dl *DistributedLock) attemptLock(ctx context.Context) error {
 		dl.lm.nodeID,
 		expiresAt,
 		now,
-		now, // For expired locks
+		now,                                                                          // For expired locks
 		now.Add(-time.Duration(heartbeatMultiplier*float64(dl.lm.Config.LeaseTime))), // For stale locks
 	)
 	if err != nil {

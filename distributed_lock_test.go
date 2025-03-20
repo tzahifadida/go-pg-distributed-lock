@@ -662,7 +662,28 @@ func TestLockManagerWithRealClock(t *testing.T) {
 		err = lock.Unlock(ctx)
 		require.NoError(t, err)
 	})
+	// Test lock with custom retry options
+	t.Run("CustomRetryOptions", func(t *testing.T) {
+		resourceName := "test-resource-custom-retries"
+		customMaxRetries := 5
+		customRetryDelay := 20 * time.Millisecond
 
+		// Create a lock with custom retry options
+		lock := lm.NewDistributedLock(resourceName,
+			WithMaxRetries(customMaxRetries),
+			WithRetryDelay(customRetryDelay))
+
+		// Verify that the options were applied
+		assert.Equal(t, customMaxRetries, lock.maxRetries)
+		assert.Equal(t, customRetryDelay, lock.retryDelay)
+
+		// Test basic functionality with the custom options
+		err := lock.Lock(ctx)
+		require.NoError(t, err)
+
+		err = lock.Unlock(ctx)
+		require.NoError(t, err)
+	})
 	// Test lock expiration with real clock
 	t.Run("LockExpirationWithRealClock", func(t *testing.T) {
 		resourceName := "test-resource-real-expiration"
