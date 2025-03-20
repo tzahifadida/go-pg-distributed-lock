@@ -33,7 +33,7 @@ type Config struct {
 
 // DefaultConfig provides default configuration values.
 var DefaultConfig = Config{
-	MaxRetries:        2,
+	MaxRetries:        1,
 	RetryDelay:        1 * time.Millisecond,
 	HeartbeatInterval: 10 * time.Second,
 	LeaseTime:         60 * time.Second,

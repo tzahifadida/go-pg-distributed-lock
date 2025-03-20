@@ -2,6 +2,10 @@
 
 A robust PostgreSQL-based distributed locking library for Go applications.
 
+⭐️ **Star This Project** ⭐️
+
+If you find this project helpful, please give it a star on GitHub! Your support is greatly appreciated.
+
 ## Overview
 
 `go-pg-distributed-lock` provides a reliable distributed locking mechanism using PostgreSQL as the coordination backend. It's designed for distributed systems that need synchronization across multiple nodes or processes.
@@ -80,12 +84,12 @@ You can customize the lock behavior with the `Config` struct:
 
 ```go
 config := pgdlock.Config{
-MaxRetries:        3,                  // Maximum attempts to acquire a lock
-RetryDelay:        100 * time.Millisecond, // Delay between retry attempts
-HeartbeatInterval: 5 * time.Second,    // How often to send heartbeats
-LeaseTime:         30 * time.Second,   // How long a lock is valid
-SchemaName:        "public",           // Database schema
-TablePrefix:       "myapp_",           // Prefix for the locks table (results in "myapp_distributed_locks")
+    MaxRetries:        3,                  // Maximum attempts to acquire a lock (default: 1)
+    RetryDelay:        100 * time.Millisecond, // Delay between retry attempts
+    HeartbeatInterval: 5 * time.Second,    // How often to send heartbeats
+    LeaseTime:         30 * time.Second,   // How long a lock is valid
+    SchemaName:        "public",           // Database schema
+    TablePrefix:       "myapp_",           // Prefix for the locks table (results in "myapp_distributed_locks")
 }
 
 lockManager, err := pgdlock.NewLockManager(ctx, db, &config)
@@ -100,14 +104,14 @@ For example, you might use different prefixes for different services:
 ```go
 // For the auth service
 authConfig := pgdlock.Config{
-TablePrefix: "auth_",  // Table will be "auth_distributed_locks"
-// ... other config options
+    TablePrefix: "auth_",  // Table will be "auth_distributed_locks"
+    // ... other config options
 }
 
 // For the payment service
 paymentConfig := pgdlock.Config{
-TablePrefix: "payment_",  // Table will be "payment_distributed_locks"
-// ... other config options
+    TablePrefix: "payment_",  // Table will be "payment_distributed_locks"
+    // ... other config options
 }
 ```
 
@@ -125,13 +129,13 @@ The library provides specific error types to handle common locking scenarios:
 
 ```go
 if err := lock.Lock(ctx); err != nil {
-if errors.Is(err, pgdlock.ErrLockAlreadyHeld) {
-// Resource is already locked by another process
-} else if errors.Is(err, pgdlock.ErrLockExpired) {
-// Lock has expired
-} else {
-// Other errors
-}
+    if errors.Is(err, pgdlock.ErrLockAlreadyHeld) {
+        // Resource is already locked by another process
+    } else if errors.Is(err, pgdlock.ErrLockExpired) {
+        // Lock has expired
+    } else {
+        // Other errors
+    }
 }
 ```
 
@@ -142,7 +146,7 @@ if errors.Is(err, pgdlock.ErrLockAlreadyHeld) {
 ```go
 // Extend the current lock by an additional 30 seconds
 if err := lock.ExtendLease(ctx, 30 * time.Second); err != nil {
-log.Printf("Failed to extend lease: %v", err)
+    log.Printf("Failed to extend lease: %v", err)
 }
 ```
 
@@ -151,29 +155,42 @@ log.Printf("Failed to extend lease: %v", err)
 ```go
 isLocked, err := lock.IsLocked(ctx)
 if err != nil {
-log.Printf("Error checking lock status: %v", err)
+    log.Printf("Error checking lock status: %v", err)
 } else if isLocked {
-log.Println("Lock is currently held by this node")
+    log.Println("Lock is currently held by this node")
 } else {
-log.Println("Lock is not currently held")
+    log.Println("Lock is not currently held")
 }
 ```
 
-### Customizing Lock Retry Behavior
+### Retrying Lock Acquisition
 
-You can customize the retry behavior for individual locks:
+By default, the library does not retry lock acquisition if it fails (MaxRetries=1). If you want automatic retries, you can either:
+
+1. Configure it globally for all locks:
+
+```go
+config := pgdlock.Config{
+    MaxRetries: 5,                  // Try 5 times before giving up
+    RetryDelay: 50 * time.Millisecond, // Wait 50ms between attempts
+    // other config options...
+}
+lockManager, err := pgdlock.NewLockManager(ctx, db, &config)
+```
+
+2. Configure it for individual locks:
 
 ```go
 // Create a lock with custom retry options
 lock := lockManager.NewDistributedLock(
-    "my-critical-resource",
-    WithMaxRetries(10),           // Try more times than the default
-    WithRetryDelay(50 * time.Millisecond), // Use a shorter retry delay
+"my-critical-resource",
+WithMaxRetries(5),              // Try up to 5 times
+WithRetryDelay(50 * time.Millisecond), // Use a shorter retry delay
 )
 
 // Acquire the lock with the custom retry behavior
 if err := lock.Lock(ctx); err != nil {
-    log.Printf("Failed to acquire lock despite 10 attempts: %v", err)
+log.Printf("Failed to acquire lock despite 5 attempts: %v", err)
 }
 ```
 
@@ -185,8 +202,8 @@ if err := lock.Lock(ctx); err != nil {
 
 ## License
 
-MIT License
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-## Contributing
+---
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Thank you for using the library! If you have any questions, suggestions, or encounter any issues, please don't hesitate to open an issue on the GitHub repository. Your feedback and contributions are greatly appreciated and help make this library better for everyone.

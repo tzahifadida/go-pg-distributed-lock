@@ -77,11 +77,22 @@ func WithRetryDelay(retryDelay time.Duration) LockOption {
 //
 // Returns:
 //   - An error if the lock cannot be acquired, nil otherwise.
+//   - By default, no retries are performed unless configured differently.
 func (dl *DistributedLock) Lock(ctx context.Context) error {
+	// Check context cancellation first
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	dl.mutex.Lock()
 	defer dl.mutex.Unlock()
 
 	for attempt := 0; attempt < dl.maxRetries; attempt++ {
+		// Check for context cancellation at each iteration
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		err := dl.attemptLock(ctx)
 		if err == nil {
 			dl.leaseExpiration = dl.lm.clock.Now().Add(dl.lm.Config.LeaseTime)

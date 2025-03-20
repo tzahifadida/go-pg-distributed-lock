@@ -468,21 +468,21 @@ func TestLockManagerEdgeCases(t *testing.T) {
 	// Test context cancellation
 	t.Run("ContextCancellation", func(t *testing.T) {
 		resourceName := "test-resource-10"
-		lock1 := lm.NewDistributedLock(resourceName)
 
-		// Acquire the lock with lock1
+		// First, we need a lock to hold the resource
+		lock1 := lm.NewDistributedLock(resourceName)
 		err := lock1.Lock(ctx)
 		require.NoError(t, err)
 
-		// Create a context that will be cancelled
-		ctxWithCancel, cancel := context.WithCancel(ctx)
-
-		// Cancel the context immediately
+		// Create a context that's already cancelled
+		cancelledCtx, cancel := context.WithCancel(ctx)
 		cancel()
 
-		// Use the cancelled context to attempt to acquire a lock - this should fail with context.Canceled
-		lock2 := lm.NewDistributedLock(resourceName)
-		err = lock2.Lock(ctxWithCancel)
+		// Create a lock with a longer max retry to ensure the context cancellation is checked
+		lock2 := lm.NewDistributedLock(resourceName, WithMaxRetries(3))
+
+		// Try to acquire the lock with the cancelled context
+		err = lock2.Lock(cancelledCtx)
 		assert.Error(t, err)
 		assert.Equal(t, context.Canceled, err)
 
