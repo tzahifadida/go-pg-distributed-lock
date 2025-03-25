@@ -19,7 +19,7 @@ Key features:
 ## Installation
 
 ```bash
-go get github.com/yourusername/go-pg-distributed-lock
+go get github.com/tzahifadida/go-pg-distributed-lock
 ```
 
 ## Quick Start
@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/stdlib"
-	pgdlock "github.com/yourusername/go-pg-distributed-lock"
+	pgdlock "github.com/tzahifadida/go-pg-distributed-lock"
 )
 
 func main() {
