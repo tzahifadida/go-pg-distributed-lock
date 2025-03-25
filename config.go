@@ -29,14 +29,29 @@ type Config struct {
 
 	// SchemaName is the database schema to use.
 	SchemaName string
+
+	// CleanupInterval is the interval at which to run the cleanup process.
+	// Default is 24 hours.
+	CleanupInterval time.Duration
+
+	// InactivityThreshold is the duration of inactivity after which a lock is considered stale and can be cleaned up.
+	// Default is 12 hours.
+	InactivityThreshold time.Duration
+
+	// EnableAutomaticCleanup determines whether to automatically run the cleanup process.
+	// Default is true.
+	EnableAutomaticCleanup bool
 }
 
 // DefaultConfig provides default configuration values.
 var DefaultConfig = Config{
-	MaxAttempts:       1,
-	RetryDelay:        1 * time.Millisecond,
-	HeartbeatInterval: 10 * time.Second,
-	LeaseTime:         60 * time.Second,
-	TablePrefix:       "",
-	SchemaName:        "",
+	MaxAttempts:            1,
+	RetryDelay:             1 * time.Millisecond,
+	HeartbeatInterval:      10 * time.Second,
+	LeaseTime:              60 * time.Second,
+	TablePrefix:            "",
+	SchemaName:             "",
+	CleanupInterval:        24 * time.Hour,
+	InactivityThreshold:    12 * time.Hour,
+	EnableAutomaticCleanup: true,
 }

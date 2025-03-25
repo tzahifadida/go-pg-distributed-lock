@@ -13,6 +13,7 @@ If you find this project helpful, please give it a star on GitHub! Your support 
 Key features:
 - Lease-based locks with configurable timeouts
 - Heartbeat mechanism to maintain locks during long operations
+- Automatic cleanup of inactive/stale locks
 - Automatic lock cleanup for crashed nodes
 - Configurable retry strategies
 - Per-lock customization of timing parameters
@@ -54,6 +55,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create lock manager: %v", err)
 	}
+	// Properly clean up resources when done
+	defer lockManager.Close()
 
 	// Create a lock for a specific resource
 	lock := lockManager.NewDistributedLock("my-resource")
@@ -91,6 +94,9 @@ config := pgdlock.Config{
     LeaseTime:         30 * time.Second,   // How long a lock is valid
     SchemaName:        "public",           // Database schema
     TablePrefix:       "myapp_",           // Prefix for the locks table (results in "myapp_distributed_locks")
+    CleanupInterval:       24 * time.Hour,     // How often to cleanup inactive locks (default: 24h)
+    InactivityThreshold:   12 * time.Hour,     // Time after which inactive locks are cleaned up (default: 12h)
+    EnableAutomaticCleanup: true,              // Whether to automatically run cleanup (default: true)
 }
 
 lockManager, err := pgdlock.NewLockManager(ctx, db, &config)
@@ -164,6 +170,38 @@ if err != nil {
 }
 ```
 
+### Managing Lock Cleanup
+
+The library includes functionality to clean up locks that haven't been used for a specified period. This helps prevent database bloat from abandoned locks.
+
+Automatic cleanup is enabled by default with a 24-hour cleanup interval and a 12-hour inactivity threshold. You can customize these settings:
+
+```go
+config := pgdlock.Config{
+    // ... other options
+    CleanupInterval:       12 * time.Hour,    // Run cleanup every 12 hours
+    InactivityThreshold:   6 * time.Hour,     // Clean locks inactive for 6+ hours
+    EnableAutomaticCleanup: true,             // Enable automatic cleanup
+}
+```
+
+You can also manually stop, start, or trigger the cleanup process:
+
+```go
+// Manually run cleanup once
+if err := lockManager.Cleanup(ctx); err != nil {
+    log.Printf("Failed to run cleanup: %v", err)
+}
+
+// Stop automatic cleanup
+lockManager.StopCleanup()
+
+// Restart automatic cleanup
+if err := lockManager.StartCleanup(ctx); err != nil {
+    log.Printf("Failed to start cleanup: %v", err)
+}
+```
+
 ### Customizing Lock Acquisition Attempts
 
 By default, the library does not retry lock acquisition if it fails (MaxAttempts=1). If you want automatic retries, you can either:
@@ -224,10 +262,12 @@ This gives you fine-grained control over lock behavior based on specific resourc
 
 ## Performance Considerations
 
-- The library uses a heartbeat mechanism that requires periodic database operations
-- Consider tuning the `HeartbeatInterval` and `LeaseTime` based on your workload
-- For high-frequency lock operations, you may need to adjust your PostgreSQL connection pool size
-- Per-lock customization allows you to optimize timing parameters for different usage patterns
+- The library uses a heartbeat mechanism that requires periodic database operations.
+- Consider tuning the `HeartbeatInterval` and `LeaseTime` based on your workload.
+- Adjust `CleanupInterval` and `InactivityThreshold` based on your application's lock usage patterns. Using shorter cleanup intervals in high-churn systems can help maintain database performance.
+- For high-frequency lock operations, you may need to adjust your PostgreSQL connection pool size.
+- Per-lock customization allows you to optimize timing parameters for different usage patterns.
+- Always call `lockManager.Close()` when shutting down your application to properly release resources.
 
 ## License
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -800,4 +801,237 @@ func retry(ctx context.Context, maxWait time.Duration, fn func() error) error {
 			// Continue with the next iteration
 		}
 	}
+}
+
+func TestLockManagerCleanup(t *testing.T) {
+	ctx := context.Background()
+
+	// Start PostgreSQL container
+	postgres, db, _, err := startPostgresContainer(ctx)
+	require.NoError(t, err)
+	defer postgres.Terminate(ctx)
+
+	// Create a new LockManager with custom cleanup settings
+	cfg := DefaultConfig
+	cfg.TablePrefix = "cleanup_test_"
+	cfg.SchemaName = "public"
+	// Set shorter durations for cleanup testing
+	cfg.CleanupInterval = 1 * time.Second
+	cfg.InactivityThreshold = 2 * time.Second
+	// Disable automatic cleanup so we can test manual cleanup
+	cfg.EnableAutomaticCleanup = false
+
+	lm, err := NewLockManager(ctx, db, &cfg)
+	require.NoError(t, err)
+	defer lm.Close()
+
+	// Set up a fake clock for testing
+	fakeClock := clockwork.NewFakeClock()
+	lm.WithClock(fakeClock)
+
+	// Test basic cleanup functionality
+	t.Run("BasicCleanup", func(t *testing.T) {
+		// Create and acquire multiple locks
+		lockCount := 5
+		resourceNames := make([]string, lockCount)
+
+		for i := 0; i < lockCount; i++ {
+			resourceNames[i] = fmt.Sprintf("test-cleanup-resource-%d", i)
+			lock := lm.NewDistributedLock(resourceNames[i])
+			err := lock.Lock(ctx)
+			require.NoError(t, err)
+		}
+
+		// Verify all locks exist in the database
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, lm.tableName)
+		var count int
+		err = db.QueryRowContext(ctx, query).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, lockCount, count, "All locks should exist in the database")
+
+		// Advance clock past the inactivity threshold
+		fakeClock.Advance(cfg.InactivityThreshold + 1*time.Second)
+
+		// Run cleanup
+		err = lm.Cleanup(ctx)
+		require.NoError(t, err)
+
+		// Verify all locks have been removed
+		err = db.QueryRowContext(ctx, query).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 0, count, "All locks should have been cleaned up")
+	})
+
+	// Test selective cleanup based on activity
+	t.Run("SelectiveCleanup", func(t *testing.T) {
+		// Reset clock
+		fakeClock = clockwork.NewFakeClock()
+		lm.WithClock(fakeClock)
+
+		// Create 5 locks
+		lockCount := 5
+		locks := make([]*DistributedLock, lockCount)
+
+		for i := 0; i < lockCount; i++ {
+			resourceName := fmt.Sprintf("test-selective-cleanup-%d", i)
+			locks[i] = lm.NewDistributedLock(resourceName)
+			err := locks[i].Lock(ctx)
+			require.NoError(t, err)
+		}
+
+		// Advance clock by half the inactivity threshold
+		fakeClock.Advance(cfg.InactivityThreshold / 2)
+
+		// Keep the first 2 locks active by extending their lease
+		for i := 0; i < 2; i++ {
+			err := locks[i].ExtendLease(ctx, 30*time.Second)
+			require.NoError(t, err)
+		}
+
+		// Advance clock past the inactivity threshold
+		fakeClock.Advance(cfg.InactivityThreshold)
+
+		// Run cleanup
+		err = lm.Cleanup(ctx)
+		require.NoError(t, err)
+
+		// Verify only inactive locks were removed
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, lm.tableName)
+		var count int
+		err = db.QueryRowContext(ctx, query).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 2, count, "Only active locks should remain")
+
+		// Cleanup remaining locks
+		for i := 0; i < 2; i++ {
+			err := locks[i].Unlock(ctx)
+			require.NoError(t, err)
+		}
+	})
+
+	// Test automatic cleanup
+	t.Run("AutomaticCleanup", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("Skipping test in short mode")
+		}
+
+		// Create a new LockManager with automatic cleanup enabled
+		autoCfg := DefaultConfig
+		autoCfg.TablePrefix = "auto_cleanup_" + uuid.NewString()[:8] + "_" // Use unique prefix to avoid conflicts
+		autoCfg.CleanupInterval = 1 * time.Second
+		autoCfg.InactivityThreshold = 1 * time.Second
+		autoCfg.EnableAutomaticCleanup = true
+
+		// Create the LockManager
+		autoLM, err := NewLockManager(ctx, db, &autoCfg)
+		require.NoError(t, err)
+		defer autoLM.Close()
+
+		// Directly insert stale records into the database
+		now := time.Now().UTC().Add(-autoCfg.InactivityThreshold - 2*time.Second) // Old records
+		query := fmt.Sprintf(`
+			INSERT INTO %s ("resource", "node_id", "expires_at", "last_heartbeat")
+			VALUES ($1, $2, $3, $4)
+		`, autoLM.tableName)
+
+		for i := 0; i < 3; i++ {
+			resourceName := fmt.Sprintf("test-auto-cleanup-%d", i)
+			_, err = db.ExecContext(ctx, query, resourceName, autoLM.nodeID, now, now)
+			require.NoError(t, err)
+		}
+
+		// Wait enough time for cleanup to run (interval + buffer)
+		time.Sleep(autoCfg.CleanupInterval + 2*time.Second)
+
+		// Verify locks have been cleaned up by automatic process
+		var count int
+		err = db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", autoLM.tableName)).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 0, count, "All locks should have been automatically cleaned up")
+	})
+
+	// Test cleanup with real clock
+	t.Run("CleanupWithRealClock", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("Skipping test in short mode")
+		}
+
+		// Create a lock manager with real clock and short cleanup settings
+		realCfg := DefaultConfig
+		realCfg.TablePrefix = "real_cleanup_"
+		realCfg.SchemaName = "public"
+		realCfg.CleanupInterval = 3 * time.Second
+		realCfg.InactivityThreshold = 2 * time.Second
+		realCfg.EnableAutomaticCleanup = false
+
+		realLM, err := NewLockManager(ctx, db, &realCfg)
+		require.NoError(t, err)
+		defer realLM.Close()
+
+		// Manually create locks in database to avoid race conditions
+		now := time.Now().UTC()
+		query := fmt.Sprintf(`
+			INSERT INTO %s ("resource", "node_id", "expires_at", "last_heartbeat")
+			VALUES ($1, $2, $3, $4)
+		`, realLM.tableName)
+
+		for i := 0; i < 3; i++ {
+			resourceName := fmt.Sprintf("test-real-cleanup-%d", i)
+			_, err = db.ExecContext(ctx, query,
+				resourceName,
+				realLM.nodeID,
+				now.Add(10*time.Second),
+				now.Add(-realCfg.InactivityThreshold-1*time.Second)) // Already inactive
+			require.NoError(t, err)
+		}
+
+		// Verify locks exist
+		countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, realLM.tableName)
+		var count int
+		err = db.QueryRowContext(ctx, countQuery).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 3, count, "All locks should exist initially")
+
+		// Run manual cleanup
+		err = realLM.Cleanup(ctx)
+		require.NoError(t, err)
+
+		// Verify locks have been cleaned up
+		err = db.QueryRowContext(ctx, countQuery).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 0, count, "All locks should have been cleaned up")
+	})
+
+	// Test disabling and re-enabling the automatic cleanup
+	t.Run("DisableEnableAutomaticCleanup", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("Skipping test in short mode")
+		}
+
+		// This test is more complex and prone to timing issues
+		// Simply test that we can toggle the cleanup state
+
+		// Create a lock manager with automatic cleanup enabled
+		enableCfg := DefaultConfig
+		enableCfg.TablePrefix = "toggle_cleanup_"
+		enableCfg.CleanupInterval = 1 * time.Second
+		enableCfg.InactivityThreshold = 2 * time.Second
+		enableCfg.EnableAutomaticCleanup = true
+
+		toggleLM, err := NewLockManager(ctx, db, &enableCfg)
+		require.NoError(t, err)
+		defer toggleLM.Close()
+
+		// Verify cleanup is running
+		assert.False(t, toggleLM.cleanupStopped, "Cleanup should be running initially")
+
+		// Stop the cleanup process
+		toggleLM.StopCleanup()
+		assert.True(t, toggleLM.cleanupStopped, "Cleanup should be stopped after StopCleanup")
+
+		// Restart cleanup
+		err = toggleLM.StartCleanup(ctx)
+		require.NoError(t, err)
+		assert.False(t, toggleLM.cleanupStopped, "Cleanup should be running after restart")
+	})
 }
