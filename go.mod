@@ -1,4 +1,4 @@
-module go-pg-distributed-lock
+module github.com/tzahifadida/go-pg-distributed-lock
 
 go 1.23
 
