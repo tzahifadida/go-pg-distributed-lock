@@ -11,17 +11,19 @@ import (
 
 // DistributedLock represents a distributed lock implementation.
 type DistributedLock struct {
-	lm               *LockManager
-	resource         string
-	heartbeatTicker  *time.Ticker
-	mutex            sync.Mutex
-	heartbeatCtx     context.Context
-	heartbeatCancel  context.CancelFunc
-	expirationTimer  *time.Timer
-	leaseExpiration  time.Time
-	heartbeatStopped bool
-	maxRetries       int           // Maximum number of retries when acquiring the lock
-	retryDelay       time.Duration // Delay between retry attempts
+	lm                *LockManager
+	resource          string
+	heartbeatTicker   *time.Ticker
+	mutex             sync.Mutex
+	heartbeatCtx      context.Context
+	heartbeatCancel   context.CancelFunc
+	expirationTimer   *time.Timer
+	leaseExpiration   time.Time
+	heartbeatStopped  bool
+	maxAttempts       int           // Maximum number of attempts when acquiring the lock
+	retryDelay        time.Duration // Delay between retry attempts
+	heartbeatInterval time.Duration // Custom heartbeat interval for this lock
+	leaseTime         time.Duration // Custom lease time for this lock
 }
 
 // NewDistributedLock creates a new DistributedLock instance.
@@ -34,11 +36,13 @@ type DistributedLock struct {
 //   - A pointer to the newly created DistributedLock.
 func (lm *LockManager) NewDistributedLock(resource string, options ...LockOption) *DistributedLock {
 	lock := &DistributedLock{
-		lm:               lm,
-		resource:         resource,
-		heartbeatStopped: true,
-		maxRetries:       lm.Config.MaxRetries,
-		retryDelay:       lm.Config.RetryDelay,
+		lm:                lm,
+		resource:          resource,
+		heartbeatStopped:  true,
+		maxAttempts:       lm.Config.MaxAttempts,
+		retryDelay:        lm.Config.RetryDelay,
+		heartbeatInterval: lm.Config.HeartbeatInterval, // Initialize with default from config
+		leaseTime:         lm.Config.LeaseTime,         // Initialize with default from config
 	}
 
 	// Apply any provided options
@@ -52,11 +56,11 @@ func (lm *LockManager) NewDistributedLock(resource string, options ...LockOption
 // LockOption defines a function type for customizing a DistributedLock
 type LockOption func(*DistributedLock)
 
-// WithMaxRetries sets a custom maximum number of retry attempts for lock acquisition
-func WithMaxRetries(maxRetries int) LockOption {
+// WithMaxAttempts sets a custom maximum number of attempts for lock acquisition
+func WithMaxAttempts(maxAttempts int) LockOption {
 	return func(lock *DistributedLock) {
-		if maxRetries > 0 {
-			lock.maxRetries = maxRetries
+		if maxAttempts > 0 {
+			lock.maxAttempts = maxAttempts
 		}
 	}
 }
@@ -66,6 +70,24 @@ func WithRetryDelay(retryDelay time.Duration) LockOption {
 	return func(lock *DistributedLock) {
 		if retryDelay > 0 {
 			lock.retryDelay = retryDelay
+		}
+	}
+}
+
+// WithHeartbeatInterval sets a custom heartbeat interval for the lock
+func WithHeartbeatInterval(heartbeatInterval time.Duration) LockOption {
+	return func(lock *DistributedLock) {
+		if heartbeatInterval > 0 {
+			lock.heartbeatInterval = heartbeatInterval
+		}
+	}
+}
+
+// WithLeaseTime sets a custom lease time for the lock
+func WithLeaseTime(leaseTime time.Duration) LockOption {
+	return func(lock *DistributedLock) {
+		if leaseTime > 0 {
+			lock.leaseTime = leaseTime
 		}
 	}
 }
@@ -87,7 +109,7 @@ func (dl *DistributedLock) Lock(ctx context.Context) error {
 	dl.mutex.Lock()
 	defer dl.mutex.Unlock()
 
-	for attempt := 0; attempt < dl.maxRetries; attempt++ {
+	for attempt := 0; attempt < dl.maxAttempts; attempt++ {
 		// Check for context cancellation at each iteration
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -95,14 +117,14 @@ func (dl *DistributedLock) Lock(ctx context.Context) error {
 
 		err := dl.attemptLock(ctx)
 		if err == nil {
-			dl.leaseExpiration = dl.lm.clock.Now().Add(dl.lm.Config.LeaseTime)
+			dl.leaseExpiration = dl.lm.clock.Now().Add(dl.leaseTime) // Use custom lease time
 			dl.startHeartbeat(ctx)
 			return nil
 		}
 		if errors.Is(err, ErrLockAlreadyHeld) {
 			return err
 		}
-		if attempt < dl.maxRetries-1 {
+		if attempt < dl.maxAttempts-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -112,12 +134,12 @@ func (dl *DistributedLock) Lock(ctx context.Context) error {
 		}
 	}
 
-	return fmt.Errorf("failed to acquire lock after %d attempts", dl.maxRetries)
+	return fmt.Errorf("failed to acquire lock after %d attempts", dl.maxAttempts)
 }
 
 func (dl *DistributedLock) attemptLock(ctx context.Context) error {
 	now := dl.lm.clock.Now()
-	expiresAt := now.Add(dl.lm.Config.LeaseTime)
+	expiresAt := now.Add(dl.leaseTime) // Use lock-specific lease time instead of config
 
 	// First try to get the current lock information
 	query := fmt.Sprintf(`
@@ -131,7 +153,7 @@ func (dl *DistributedLock) attemptLock(ctx context.Context) error {
 	if err == nil {
 		// Lock exists, check if it's expired or stale
 		if now.Before(currentLock.ExpiresAt) {
-			if now.Sub(currentLock.LastHeartbeat) <= time.Duration(heartbeatMultiplier*float64(dl.lm.Config.LeaseTime)) {
+			if now.Sub(currentLock.LastHeartbeat) <= time.Duration(heartbeatMultiplier*float64(dl.leaseTime)) {
 				return ErrLockAlreadyHeld
 			}
 		}
@@ -157,8 +179,8 @@ func (dl *DistributedLock) attemptLock(ctx context.Context) error {
 		dl.lm.nodeID,
 		expiresAt,
 		now,
-		now,                                                                          // For expired locks
-		now.Add(-time.Duration(heartbeatMultiplier*float64(dl.lm.Config.LeaseTime))), // For stale locks
+		now, // For expired locks
+		now.Add(-time.Duration(heartbeatMultiplier*float64(dl.leaseTime))), // For stale locks, using custom lease time
 	)
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
@@ -179,8 +201,9 @@ func (dl *DistributedLock) attemptLock(ctx context.Context) error {
 func (dl *DistributedLock) startHeartbeat(ctx context.Context) {
 	dl.stopHeartbeatLocked()
 
-	heartbeatInterval := dl.lm.Config.HeartbeatInterval
-	if heartbeatInterval >= dl.lm.Config.LeaseTime {
+	// Use lock-specific heartbeat interval and lease time
+	heartbeatInterval := dl.heartbeatInterval
+	if heartbeatInterval >= dl.leaseTime/2 {
 		return
 	}
 
@@ -198,6 +221,11 @@ func (dl *DistributedLock) startHeartbeat(ctx context.Context) {
 				if dl.heartbeatStopped {
 					dl.mutex.Unlock()
 					return
+				}
+				// Update lease expiration time to extend it
+				dl.leaseExpiration = dl.lm.clock.Now().Add(dl.leaseTime)
+				if dl.expirationTimer != nil {
+					dl.expirationTimer.Reset(dl.leaseTime)
 				}
 				err := dl.sendHeartbeat(dl.heartbeatCtx)
 				dl.mutex.Unlock()

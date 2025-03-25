@@ -11,8 +11,8 @@ const (
 
 // Config holds the configuration options for the distributed lock system.
 type Config struct {
-	// MaxRetries is the maximum number of attempts to acquire the lock.
-	MaxRetries int
+	// MaxAttempts is the maximum number of attempts to acquire the lock.
+	MaxAttempts int
 
 	// RetryDelay is the duration to wait between lock acquisition attempts.
 	RetryDelay time.Duration
@@ -33,7 +33,7 @@ type Config struct {
 
 // DefaultConfig provides default configuration values.
 var DefaultConfig = Config{
-	MaxRetries:        1,
+	MaxAttempts:       1,
 	RetryDelay:        1 * time.Millisecond,
 	HeartbeatInterval: 10 * time.Second,
 	LeaseTime:         60 * time.Second,

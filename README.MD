@@ -15,6 +15,7 @@ Key features:
 - Heartbeat mechanism to maintain locks during long operations
 - Automatic lock cleanup for crashed nodes
 - Configurable retry strategies
+- Per-lock customization of timing parameters
 
 ## Installation
 
@@ -84,7 +85,7 @@ You can customize the lock behavior with the `Config` struct:
 
 ```go
 config := pgdlock.Config{
-    MaxRetries:        3,                  // Maximum attempts to acquire a lock (default: 1)
+    MaxAttempts:       3,                  // Maximum attempts to acquire a lock (default: 1)
     RetryDelay:        100 * time.Millisecond, // Delay between retry attempts
     HeartbeatInterval: 5 * time.Second,    // How often to send heartbeats
     LeaseTime:         30 * time.Second,   // How long a lock is valid
@@ -163,15 +164,15 @@ if err != nil {
 }
 ```
 
-### Retrying Lock Acquisition
+### Customizing Lock Acquisition Attempts
 
-By default, the library does not retry lock acquisition if it fails (MaxRetries=1). If you want automatic retries, you can either:
+By default, the library does not retry lock acquisition if it fails (MaxAttempts=1). If you want automatic retries, you can either:
 
 1. Configure it globally for all locks:
 
 ```go
 config := pgdlock.Config{
-    MaxRetries: 5,                  // Try 5 times before giving up
+    MaxAttempts: 5,                  // Try 5 times before giving up
     RetryDelay: 50 * time.Millisecond, // Wait 50ms between attempts
     // other config options...
 }
@@ -183,22 +184,50 @@ lockManager, err := pgdlock.NewLockManager(ctx, db, &config)
 ```go
 // Create a lock with custom retry options
 lock := lockManager.NewDistributedLock(
-"my-critical-resource",
-WithMaxRetries(5),              // Try up to 5 times
-WithRetryDelay(50 * time.Millisecond), // Use a shorter retry delay
+    "my-critical-resource",
+    pgdlock.WithMaxAttempts(5),              // Try up to 5 times
+    pgdlock.WithRetryDelay(50 * time.Millisecond), // Use a shorter retry delay
 )
 
 // Acquire the lock with the custom retry behavior
 if err := lock.Lock(ctx); err != nil {
-log.Printf("Failed to acquire lock despite 5 attempts: %v", err)
+    log.Printf("Failed to acquire lock despite 5 attempts: %v", err)
 }
 ```
+
+### Customizing Timing Parameters For Individual Locks
+
+You can customize the heartbeat interval and lease time for individual locks:
+
+```go
+// Create a lock with custom timing parameters
+lock := lockManager.NewDistributedLock(
+    "my-long-running-task",
+    pgdlock.WithHeartbeatInterval(3 * time.Second),  // Send heartbeats more frequently
+    pgdlock.WithLeaseTime(2 * time.Minute),         // Use a longer lease time
+)
+
+// You can combine multiple options
+lock := lockManager.NewDistributedLock(
+    "my-critical-resource",
+    pgdlock.WithMaxAttempts(5),                // Try up to 5 times
+    pgdlock.WithRetryDelay(50 * time.Millisecond),   // Use a shorter retry delay
+    pgdlock.WithHeartbeatInterval(1 * time.Second),  // Send frequent heartbeats
+    pgdlock.WithLeaseTime(10 * time.Second)          // Use a shorter lease time
+)
+```
+
+This gives you fine-grained control over lock behavior based on specific resource requirements:
+- Use shorter lease times for high-contention resources
+- Use longer lease times for long-running operations
+- Adjust heartbeat frequency based on network reliability and operation duration
 
 ## Performance Considerations
 
 - The library uses a heartbeat mechanism that requires periodic database operations
 - Consider tuning the `HeartbeatInterval` and `LeaseTime` based on your workload
 - For high-frequency lock operations, you may need to adjust your PostgreSQL connection pool size
+- Per-lock customization allows you to optimize timing parameters for different usage patterns
 
 ## License
 

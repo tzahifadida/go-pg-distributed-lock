@@ -166,7 +166,7 @@ func TestLockManagerAdvanced(t *testing.T) {
 	cfg := DefaultConfig
 	cfg.TablePrefix = "test_"
 	cfg.SchemaName = "public"
-	cfg.MaxRetries = 3
+	cfg.MaxAttempts = 3
 	cfg.RetryDelay = 100 * time.Millisecond
 	cfg.LeaseTime = 10 * time.Second
 	cfg.HeartbeatInterval = 2 * time.Second
@@ -479,7 +479,7 @@ func TestLockManagerEdgeCases(t *testing.T) {
 		cancel()
 
 		// Create a lock with a longer max retry to ensure the context cancellation is checked
-		lock2 := lm.NewDistributedLock(resourceName, WithMaxRetries(3))
+		lock2 := lm.NewDistributedLock(resourceName, WithMaxAttempts(3))
 
 		// Try to acquire the lock with the cancelled context
 		err = lock2.Lock(cancelledCtx)
@@ -636,18 +636,21 @@ func TestLockManagerWithRealClock(t *testing.T) {
 			t.Skip("Skipping test in short mode")
 		}
 
-		resourceName := "test-resource-real-clock"
-		lock := lm.NewDistributedLock(resourceName)
+		// Create a test-specific config with appropriate lease time
+		tempCfg := DefaultConfig
+		tempCfg.TablePrefix = "test_"
+		tempCfg.SchemaName = "public"
+		tempCfg.LeaseTime = 5 * time.Second // Longer lease time
+		tempCfg.HeartbeatInterval = 500 * time.Millisecond
 
-		// Use a longer lease time for this test
-		originalLeaseTime := cfg.LeaseTime
-		cfg.LeaseTime = 5 * time.Second
-		defer func() {
-			cfg.LeaseTime = originalLeaseTime
-		}()
+		tempLM, err := NewLockManager(ctx, db, &tempCfg)
+		require.NoError(t, err)
+
+		resourceName := "test-resource-real-clock"
+		lock := tempLM.NewDistributedLock(resourceName)
 
 		// Acquire the lock
-		err := lock.Lock(ctx)
+		err = lock.Lock(ctx)
 		require.NoError(t, err)
 
 		// Wait for a bit, but less than the lease time
@@ -663,18 +666,18 @@ func TestLockManagerWithRealClock(t *testing.T) {
 		require.NoError(t, err)
 	})
 	// Test lock with custom retry options
-	t.Run("CustomRetryOptions", func(t *testing.T) {
-		resourceName := "test-resource-custom-retries"
-		customMaxRetries := 5
+	t.Run("CustomAttemptOptions", func(t *testing.T) {
+		resourceName := "test-resource-custom-attempts"
+		customMaxAttempts := 5
 		customRetryDelay := 20 * time.Millisecond
 
 		// Create a lock with custom retry options
 		lock := lm.NewDistributedLock(resourceName,
-			WithMaxRetries(customMaxRetries),
+			WithMaxAttempts(customMaxAttempts),
 			WithRetryDelay(customRetryDelay))
 
 		// Verify that the options were applied
-		assert.Equal(t, customMaxRetries, lock.maxRetries)
+		assert.Equal(t, customMaxAttempts, lock.maxAttempts)
 		assert.Equal(t, customRetryDelay, lock.retryDelay)
 
 		// Test basic functionality with the custom options
